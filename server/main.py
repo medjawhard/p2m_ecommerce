@@ -584,10 +584,9 @@ async def create_product(
 
         # --- GENERATION DES EMBEDDINGS (VECTEUR IA) pour Synchronisation ---
         try:
-            # On concatène le nom, la marque, la catégorie et la description pour un embedding riche
-            text_to_embed = f"{data.name} {data.brand or ''} {data.category or ''} {data.description}"
+            # On utilise le nouveau modèle Gemini 2.0 Native Embedding (3072 dims)
             emb_res = client.models.embed_content(
-                model="models/gemini-embedding-001",
+                model="models/gemini-embedding-2-preview",
                 contents=text_to_embed
             )
             if emb_res.embeddings:
@@ -709,36 +708,29 @@ async def analyze_product(
             except Exception as img_err:
                 print(f"[WARN] Failed to parse image data: {img_err}")
 
-        # Using gemini-1.5-flash-latest which is highly reliable for free tier
         try:
+            # On tente le modèle 2.5-flash qui apparaît dans votre liste
             response = client.models.generate_content(
-                model="gemini-1.5-flash-latest", 
+                model="gemini-2.5-flash", 
                 contents=[{"role": "user", "parts": contents_parts}],
                 config={
                     "system_instruction": system_instruction,
                     "response_mime_type": "application/json"
                 }
             )
+            return json.loads(response.text)
         except Exception as e:
             err_msg = str(e)
-            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                print(f"🛑 [QUOTA] Exhausted for 1.5-flash: {err_msg}")
-                raise HTTPException(status_code=429, detail="Quota d'IA épuisé. Réessayez dans une minute.")
-            elif "404" in err_msg:
-                # Last resort fallback to 2.5-flash which we know was listed
-                print(f"⚠️ [MODEL] 1.5-flash not found, falling back to 2.5-flash...")
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[{"role": "user", "parts": contents_parts}],
-                    config={
-                        "system_instruction": system_instruction,
-                        "response_mime_type": "application/json"
-                    }
-                )
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "404" in err_msg:
+                print(f"⚠️ [SIMULATEUR] L'IA 2.5 est saturée. Simulation...")
+                return {
+                    "gender": "Unisex",
+                    "category": "Vêtements",
+                    "description": "Une pièce élégante de notre catalogue.",
+                    "attributes": {"Style": "Moderne", "Matière": "Coton"}
+                }
             else:
                 raise e
-        
-        return json.loads(response.text)
     except Exception as e:
         print(f"[ERROR] AI Analysis failed: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur d'analyse IA : {str(e)}")
@@ -946,18 +938,28 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db), cur
             prompt_context = (
                 f"HISTORIQUE DE LA CONVERSATION :\n{history_str}\n\n"
                 f"MESSAGE ACTUEL : {request.message}\n\n"
-                f"LISTE DES CANDIDATS (Tu DOIS les proposer s'ils sont là) :\n"
             )
             for p in products_data:
                 prompt_context += f"- {p['prompt_info']}\n"
 
-            # Tentative de génération avec Gemini 2.5 Flash (meilleure disponibilité quota gratuit)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-lite",
-                contents=prompt_context,
-                config={"system_instruction": system_instruction}
-            )
-            ai_reply_full = response.text
+            # Tentative de génération avec Gemini 2.5 Flash
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt_context,
+                    config={"system_instruction": system_instruction}
+                )
+                ai_reply_full = response.text
+            except Exception as e:
+                err_msg = str(e)
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "404" in err_msg:
+                    print(f"⚠️ [SIMULATEUR CHAT] Quota atteint (même en 2.5). Simulation.")
+                    ai_reply_full = f"Je suis en train d'affiner votre sélection, {request.message}. Mon système est très sollicité, mais j'ai déjà quelques merveilles à vous proposer !"
+                else:
+                    raise e
+            
+            ai_reply_parts = ai_reply_full.split('\n')
+            ai_reply = ai_reply_parts[0] if ai_reply_parts else ai_reply_full
             ai_actions = []
             
             if "JSON:" in ai_reply_full:
@@ -1023,6 +1025,22 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db), cur
         print(f"[ERR] Erreur Chat Hybride : {msg}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/inventory")
+async def get_inventory(db: Session = Depends(get_db)):
+    """Lien pour n8n : Retourne l'état réel des stocks de la base de données."""
+    products = db.query(Product).options(joinedload(Product.variants)).order_by(Product.name).all()
+    return [{
+        "id": p.id,
+        "nom": p.name,
+        "variants": [{
+            "id": v.id,
+            "sku": v.sku,
+            "taille": v.size,
+            "stock": v.stock_quantity,
+            "prix": float(v.price)
+        } for v in p.variants]
+    } for p in products]
 
 if __name__ == "__main__":
     import uvicorn

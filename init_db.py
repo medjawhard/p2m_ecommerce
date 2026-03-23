@@ -21,7 +21,8 @@ def init_db():
         'others.sql'
     ]
     
-    base_dir = 'c:/Users/medja/Downloads/ecommerce_21_03_2026/ecommerce_10_03_2026/ecommerce/ecommerce'
+    # Utiliser le dossier où se trouve ce script (p2m_ecommerce)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     
     try:
         for f in sql_files:

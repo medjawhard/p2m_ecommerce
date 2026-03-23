@@ -6,8 +6,8 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- 2. NETTOYAGE (Décommentez ces lignes si vous voulez réinitialiser la base à zéro)
- DROP TABLE IF EXISTS product_variants CASCADE;
- DROP TABLE IF EXISTS products CASCADE;
+-- DROP TABLE IF EXISTS product_variants CASCADE;
+-- DROP TABLE IF EXISTS products CASCADE;
 
 -- 3. TABLE PARENT : Produits (Optimisée pour l'IA)
 CREATE TABLE IF NOT EXISTS products (

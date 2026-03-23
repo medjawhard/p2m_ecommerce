@@ -15,7 +15,7 @@ class Product(Base):
     image_url = Column(Text)
     gender = Column(String(20))
     attributes = Column(JSONB, default={})
-    embedding = Column(Vector(3072)) # Gemini embeddings dimension (V1: 768, V2/SDK: 3072)
+    embedding = Column(Vector(3072)) # Gemini 2.0 Native Embedding dimension (3072)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
