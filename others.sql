@@ -34,3 +34,12 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity INTEGER DEFAULT 1,
     price DECIMAL(10, 2) NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS inventory_alerts (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(150),
+    message TEXT NOT NULL,
+    alert_type VARCHAR(50) DEFAULT 'low_stock',
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

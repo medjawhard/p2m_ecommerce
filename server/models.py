@@ -106,3 +106,13 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     variant = relationship("ProductVariant")
+
+class InventoryAlert(Base):
+    __tablename__ = "inventory_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_name = Column(String(150))
+    message = Column(Text, nullable=False)
+    alert_type = Column(String(50), default="low_stock") # low_stock, out_of_stock, restock
+    is_read = Column(Boolean, default=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())

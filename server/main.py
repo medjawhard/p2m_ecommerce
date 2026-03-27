@@ -1,6 +1,6 @@
 import os
 import json
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import FastAPI, HTTPException, Depends, Security, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ from google import genai
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session, joinedload
 from database import get_db
-from models import Product, Customer, ProductVariant, GlobalFeedback, OrderItem
+from models import Product, Customer, ProductVariant, GlobalFeedback, OrderItem, InventoryAlert
 from datetime import datetime, timedelta
 import bcrypt
 from jose import JWTError, jwt
@@ -96,6 +96,11 @@ class OrderCreate(BaseModel):
 class AnalysisRequest(BaseModel):
     description: str
     image_base64: Optional[str] = None
+
+class AlertCreate(BaseModel):
+    product_name: Optional[str] = "Rapport Global"
+    message: str
+    alert_type: str = "low_stock"
 
 # Helper Functions
 def create_access_token(data: dict):
@@ -1041,6 +1046,113 @@ async def get_inventory(db: Session = Depends(get_db)):
             "prix": float(v.price)
         } for v in p.variants]
     } for p in products]
+
+@app.post("/api/admin/alerts")
+async def create_alert(alert: AlertCreate, x_api_key: str = Header(None), db: Session = Depends(get_db)):
+    log_msg = f"\n[ALERT] Received: {alert.product_name} | Type: {alert.alert_type} | Msg Len: {len(alert.message)}"
+    with open("alerts_debug.log", "a", encoding="utf-8") as f:
+        f.write(log_msg + "\n")
+
+    if x_api_key != os.getenv("STOCK_AGENT_KEY"):
+        return {"status": "error", "message": "Invalid API Key"}
+    
+    # Trigger AI only for reports or long unstructured texts
+    is_report = alert.product_name == "Rapport Global" or "rapport" in alert.message.lower() or len(alert.message) > 200
+    
+    if is_report:
+        with open("alerts_debug.log", "a", encoding="utf-8") as f:
+            f.write("DEBUG: Triggering Gemini Parser...\n")
+        prompt = f"""
+        Tu es un expert en logistique et gestion de stock. Analyse ce rapport et décompose-le en alertes individuelles.
+        Rapport : {alert.message}
+        
+        Consignes de typologie :
+        - "out_of_stock" : stock épuisé.
+        - "low_stock" : stock critique.
+        - "seasonal" : conseil lié à une saison, un événement ou une tendance (ex: Printemps, Mariages, Soldes).
+        
+        Réponds UNIQUEMENT avec un JSON au format suivant :
+        [
+          {{"product_name": "NOM DU PRODUIT ou GÉNÉRAL", "message": "Description courte", "alert_type": "out_of_stock | low_stock | seasonal"}}
+        ]
+        """
+        models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        success = False
+        for model_name in models_to_try:
+            try:
+                with open("alerts_debug.log", "a", encoding="utf-8") as f:
+                    f.write(f"DEBUG: Attempting model '{model_name}'...\n")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                sub_alerts = json.loads(response.text)
+                
+                created_ids = []
+                for sa in sub_alerts:
+                    new_sa = InventoryAlert(
+                        product_name=sa.get("product_name", "GÉNÉRAL"),
+                        message=sa.get("message", ""),
+                        alert_type=sa.get("alert_type", "low_stock")
+                    )
+                    db.add(new_sa)
+                    db.flush()
+                    created_ids.append(new_sa.id)
+                
+                db.commit()
+                with open("alerts_debug.log", "a", encoding="utf-8") as f:
+                    f.write(f"DEBUG: Success with '{model_name}'. Created {len(created_ids)} sub-alerts.\n")
+                return {"status": "success", "count": len(created_ids), "ids": created_ids}
+            except Exception as e:
+                with open("alerts_debug.log", "a", encoding="utf-8") as f:
+                    f.write(f"DEBUG: Model '{model_name}' failed: {e}\n")
+                continue
+        
+        with open("alerts_debug.log", "a", encoding="utf-8") as f:
+            f.write("ERROR: All Gemini models failed.\n")
+    
+    # Fallback or Single Alert
+    new_alert = InventoryAlert(
+        product_name=alert.product_name,
+        message=alert.message,
+        alert_type=alert.alert_type
+    )
+    db.add(new_alert)
+    db.commit()
+    db.refresh(new_alert)
+    with open("alerts_debug.log", "a", encoding="utf-8") as f:
+        f.write(f"DEBUG: Single alert saved ID={new_alert.id} Type={new_alert.alert_type}\n")
+    return {"status": "success", "id": new_alert.id}
+
+@app.get("/api/admin/alerts")
+async def get_alerts(db: Session = Depends(get_db)):
+    alerts = db.query(InventoryAlert).order_by(InventoryAlert.created_at.desc()).limit(50).all()
+    # Let's attach images by searching for product names
+    result = []
+    for a in alerts:
+        # Search for product to get image
+        p = db.query(Product).filter(Product.name.ilike(f"%{a.product_name}%")).first()
+        result.append({
+            "id": a.id,
+            "product_name": a.product_name,
+            "message": a.message,
+            "alert_type": a.alert_type,
+            "is_read": a.is_read,
+            "created_at": a.created_at,
+            "image_url": p.image_url if p else None,
+            "product_id": p.id if p else None
+        })
+    return result
+
+@app.patch("/api/admin/alerts/{alert_id}/read")
+async def mark_alert_read(alert_id: int, db: Session = Depends(get_db)):
+    alert = db.query(InventoryAlert).filter(InventoryAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alerte non trouvée")
+    alert.is_read = True
+    db.commit()
+    return {"status": "success"}
 
 if __name__ == "__main__":
     import uvicorn

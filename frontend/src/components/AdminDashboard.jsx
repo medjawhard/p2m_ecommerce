@@ -75,6 +75,9 @@ const AdminDashboard = ({ onLogout }) => {
     const [inventoryFilter, setInventoryFilter] = useState('all');
     const [inventorySort, setInventorySort] = useState({ key: null, direction: 'asc' });
     const [orderSort, setOrderSort] = useState({ key: null, direction: 'asc' });
+    const [alerts, setAlerts] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [activeAlertCategory, setActiveAlertCategory] = useState(0); // 0: Ruptures, 1: Stocks Bas, 2: Historique
 
     const selectedProduct = inventory.find(p => p.id === selectedProductId);
 
@@ -123,10 +126,66 @@ const AdminDashboard = ({ onLogout }) => {
                 setFeedbacks(await feedRes.value.json());
             }
 
+            // Fetch Alerts separately (optional but good)
+            await fetchAlerts();
+
         } catch (err) {
             console.error("Erreur générale admin:", err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchAlerts = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const res = await fetch(`${CONFIG.API_BASE_URL}/api/admin/alerts`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAlerts(data);
+                setUnreadCount(data.filter(a => !a.is_read).length);
+            }
+        } catch (err) {
+            console.error("Erreur fetch alerts:", err);
+        }
+    };
+
+    const urgentCount = alerts.filter(a => a.alert_type === 'out_of_stock' && !a.is_read).length;
+    const warningCount = alerts.filter(a => a.alert_type === 'low_stock' && !a.is_read).length;
+    const seasonalCount = alerts.filter(a => a.alert_type === 'seasonal' && !a.is_read).length;
+
+    const markAlertAsRead = async (id) => {
+        const token = localStorage.getItem('token');
+        try {
+            const res = await fetch(`${CONFIG.API_BASE_URL}/api/admin/alerts/${id}/read`, {
+                method: 'PATCH',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) fetchAlerts();
+        } catch (err) {
+            console.error("Erreur mark read:", err);
+        }
+    };
+
+    const markAllAlertsAsRead = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            // Sequential mark read for simplicity or just a new endpoint? 
+            // I'll do it sequentially for now to avoid server changes, 
+            // but for performance a bulk endpoint is better.
+            // Let's assume I'll add a bulk endpoint or just loop.
+            const unread = alerts.filter(a => !a.is_read);
+            await Promise.all(unread.map(a => 
+                fetch(`${CONFIG.API_BASE_URL}/api/admin/alerts/${a.id}/read`, {
+                    method: 'PATCH',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                })
+            ));
+            fetchAlerts();
+        } catch (err) {
+            console.error("Erreur mark all read:", err);
         }
     };
 
@@ -412,6 +471,7 @@ const AdminDashboard = ({ onLogout }) => {
                         { id: 'orders', label: "COMMANDES", icon: "📦" },
                         { id: 'inventory', label: "INVENTAIRE", icon: "🏗️" },
                         { id: 'feedbacks', label: "AVIS STUDIO", icon: "💬" },
+                        { id: 'alerts', label: "AGENT IA & ALERTES", icon: unreadCount > 0 ? "🔔" : "🤖", badge: unreadCount },
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -423,11 +483,18 @@ const AdminDashboard = ({ onLogout }) => {
                                 fontSize: '0.75rem', fontWeight: activeTab === tab.id ? '700' : '400',
                                 letterSpacing: '2px', display: 'flex', alignItems: 'center', gap: '15px',
                                 transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-                                borderLeft: activeTab === tab.id ? '3px solid #c5a059' : '3px solid transparent'
+                                borderLeft: activeTab === tab.id ? '3px solid #c5a059' : '3px solid transparent',
+                                position: 'relative'
                             }}
                         >
                             <span style={{ fontSize: '1.2rem', transition: '0.3s', transform: activeTab === tab.id ? 'scale(1.1)' : 'scale(1)' }}>{tab.icon}</span>
                             {tab.label}
+                            {tab.badge > 0 && (
+                                <span style={{
+                                    position: 'absolute', right: '15px', background: '#ff4444', color: 'white',
+                                    fontSize: '0.6rem', padding: '2px 6px', borderRadius: '10px', fontWeight: 'bold'
+                                }}>{tab.badge}</span>
+                            )}
                         </button>
                     ))}
                 </nav>
@@ -463,6 +530,7 @@ const AdminDashboard = ({ onLogout }) => {
                             {activeTab === 'orders' && "Suivi Commandes"}
                             {activeTab === 'inventory' && "Gestion des Stocks"}
                             {activeTab === 'feedbacks' && "Retours d'Expérience"}
+                            {activeTab === 'alerts' && "Agent IA & Notifications"}
                         </h2>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '30px' }}>
@@ -964,6 +1032,128 @@ const AdminDashboard = ({ onLogout }) => {
                                                 <p>AUCUN RETOUR CLIENT POUR LE MOMENT</p>
                                             </div>
                                         )}
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    }
+
+                    {
+                        activeTab === 'alerts' && (
+                            <div style={{ animation: 'fadeIn 0.5s ease-out' }}>
+                                {/* Modern Header & Stats Bar */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '30px' }}>
+                                    <div>
+                                        <h2 style={{ fontSize: '2.5rem', fontWeight: '200', margin: 0, fontFamily: "'Playfair Display', serif" }}>PANORAMA DES ALERTES</h2>
+                                        <p style={{ color: '#c5a059', letterSpacing: '3px', fontSize: '0.7rem', fontWeight: 'bold' }}>NAVIGATION INTERACTIVE IA</p>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '20px' }}>
+                                        <button onClick={markAllAlertsAsRead} disabled={unreadCount === 0} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '12px 25px', borderRadius: '12px', cursor: 'pointer', fontSize: '0.75rem', opacity: unreadCount === 0 ? 0.3 : 1 }}>MARQUER TOUT LU</button>
+                                        <button onClick={fetchAlerts} style={{ background: '#c5a059', border: 'none', color: 'black', padding: '12px 30px', borderRadius: '12px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}>ACTUALISER</button>
+                                    </div>
+                                </div>
+
+                                {/* Sliding Window Tabs */}
+                                <div style={{ display: 'flex', gap: '40px', marginBottom: '40px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '15px' }}>
+                                    {[
+                                        { id: 0, label: 'RUPTURES CRITIQUES', color: '#ff4444', count: urgentCount },
+                                        { id: 1, label: 'STOCKS FAIBLES', color: '#ffbb33', count: warningCount },
+                                        { id: 2, label: 'TENDANCES & SAISONS', color: '#ace1af', count: seasonalCount },
+                                        { id: 3, label: 'HISTORIQUE TRAITÉ', color: '#c5a059', count: alerts.filter(a => a.is_read).length }
+                                    ].map((cat) => (
+                                        <div 
+                                            key={cat.id}
+                                            onClick={() => setActiveAlertCategory(cat.id)}
+                                            style={{ 
+                                                cursor: 'pointer',
+                                                padding: '10px 0',
+                                                position: 'relative',
+                                                transition: '0.3s',
+                                                opacity: activeAlertCategory === cat.id ? 1 : 0.4
+                                            }}
+                                        >
+                                            <span style={{ fontSize: '0.75rem', fontWeight: '900', letterSpacing: '2px', color: activeAlertCategory === cat.id ? cat.color : 'white' }}>
+                                                {cat.label}
+                                                <span style={{ marginLeft: '10px', fontSize: '0.6rem', background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '100px' }}>{cat.count}</span>
+                                            </span>
+                                            {activeAlertCategory === cat.id && (
+                                                <div style={{ 
+                                                    position: 'absolute', bottom: '-2px', left: 0, right: 0, height: '2px', 
+                                                    background: cat.color, boxShadow: `0 0 15px ${cat.color}`
+                                                }}></div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                {/* Sliding Windows Deck */}
+                                <div style={{ overflow: 'hidden', position: 'relative', height: '65vh', borderRadius: '30px' }}>
+                                    <div style={{ 
+                                        display: 'flex', 
+                                        transition: 'transform 0.8s cubic-bezier(0.19, 1, 0.22, 1)',
+                                        transform: `translateX(-${activeAlertCategory * 100}%)`,
+                                        height: '100%'
+                                    }}>
+                                        {[
+                                            { type: 'out_of_stock', items: alerts.filter(a => a.alert_type === 'out_of_stock' && !a.is_read), title: 'URGENCES ABSOLUES', color: '#ff4444' },
+                                            { type: 'low_stock', items: alerts.filter(a => a.alert_type === 'low_stock' && !a.is_read), title: 'PRÉVENTION STOCK', color: '#ffbb33' },
+                                            { type: 'seasonal', items: alerts.filter(a => a.alert_type === 'seasonal' && !a.is_read), title: 'STRATÉGIE SAISONNIÈRE', color: '#ace1af' },
+                                            { type: 'all', items: alerts.filter(a => a.is_read), title: 'ARCHIVES IA', color: '#c5a059' }
+                                        ].map((pane, idx) => (
+                                            <div key={idx} style={{ minWidth: '100%', padding: '0 5px' }}>
+                                                <div style={{ 
+                                                    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '30px', 
+                                                    height: '100%', overflowY: 'auto', paddingRight: '15px' 
+                                                }} className="custom-scroll">
+                                                    {pane.items.length > 0 ? pane.items.map((a) => (
+                                                        <div key={a.id} className="glass-card" style={{ 
+                                                            padding: 0, borderRadius: '24px', overflow: 'hidden', position: 'relative',
+                                                            background: 'rgba(0,0,0,0.5)', border: `1px solid ${activeAlertCategory === idx ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)'}`,
+                                                            transition: '0.4s'
+                                                        }}>
+                                                            <div style={{ display: 'flex', height: '220px' }}>
+                                                                {/* Product Side Visual */}
+                                                                <div style={{ width: '40%', position: 'relative', overflow: 'hidden' }}>
+                                                                    {a.image_url ? (
+                                                                        <img src={a.image_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
+                                                                    ) : (
+                                                                        <div style={{ width: '100%', height: '100%', background: '#111', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>📦</div>
+                                                                    )}
+                                                                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to right, transparent, rgba(0,0,0,0.8))' }}></div>
+                                                                </div>
+
+                                                                {/* Content Area */}
+                                                                <div style={{ width: '60%', padding: '30px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                                                    <div style={{ fontSize: '0.6rem', letterSpacing: '3px', color: pane.color, fontWeight: 'bold', marginBottom: '10px' }}>{pane.title}</div>
+                                                                    <h4 style={{ margin: '0 0 10px 0', fontSize: '1.2rem', fontFamily: "'Playfair Display', serif" }}>{a.product_name.toUpperCase()}</h4>
+                                                                    <p style={{ margin: '0 0 20px 0', fontSize: '0.8rem', opacity: 0.6, lineHeight: '1.6' }}>{a.message}</p>
+                                                                    
+                                                                    <div style={{ display: 'flex', gap: '15px' }}>
+                                                                        {a.product_id && (
+                                                                            <button 
+                                                                                onClick={() => setSelectedProductId(a.product_id)}
+                                                                                style={{ flex: 1, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '10px', borderRadius: '10px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer' }}
+                                                                            >STUDIO</button>
+                                                                        )}
+                                                                        {!a.is_read && (
+                                                                            <button 
+                                                                                onClick={() => markAlertAsRead(a.id)}
+                                                                                style={{ flex: 1, background: pane.color, border: 'none', color: 'black', padding: '10px', borderRadius: '10px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer' }}
+                                                                            >RÉGLÉ</button>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )) : (
+                                                        <div style={{ textAlign: 'center', padding: '100px 0', opacity: 0.1 }}>
+                                                            <div style={{ fontSize: '5rem' }}>✨</div>
+                                                            <p style={{ letterSpacing: '5px', fontSize: '0.8rem' }}>AUCUNE ALERTE DANS CETTE SECTION</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
